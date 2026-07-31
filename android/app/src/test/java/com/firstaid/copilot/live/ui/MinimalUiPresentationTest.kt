@@ -52,6 +52,26 @@ class MinimalUiPresentationTest {
     }
 
     @Test
+    fun demoCprMetricsOnlyWaveDuringCompressionLoop() {
+        assertNull(demoCprMetricPresentation(tick = 0, currentStage = "S6_CPR_READY"))
+
+        val first = demoCprMetricPresentation(tick = 0, currentStage = "S7_CPR_LOOP")
+        val stillOffset = demoCprMetricPresentation(tick = 2, currentStage = "S7_CPR_LOOP")
+        val aligned = demoCprMetricPresentation(tick = 3, currentStage = "S7_CPR_LOOP")
+        val alignedWave = demoCprMetricPresentation(tick = 4, currentStage = "S7_CPR_LOOP")
+
+        assertEquals("right", first?.handPosition)
+        assertEquals(106, first?.rate)
+        assertEquals(80, first?.qualityScore)
+        assertEquals("right", stillOffset?.handPosition)
+        assertEquals(84, stillOffset?.qualityScore)
+        assertEquals("center", aligned?.handPosition)
+        assertEquals(90, aligned?.qualityScore)
+        assertEquals("center", alignedWave?.handPosition)
+        assertEquals(92, alignedWave?.qualityScore)
+    }
+
+    @Test
     fun voiceControlUsesStartListenStopOnly() {
         assertEquals("开始", voiceControlPresentation(MicState.Idle, null).label)
         assertEquals("开始", voiceControlPresentation(MicState.Idle, "").label)

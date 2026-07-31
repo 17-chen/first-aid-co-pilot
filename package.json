@@ -12,6 +12,8 @@
     "scenario:live": "node src/cli/runScenario.js --mode live",
     "setup:gemma": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/setupGemma.ps1",
     "setup:speech": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/setupSpeech.ps1",
+    "android:prepare-offline-assets": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/android/Prepare-ApkModelAssets.ps1",
+    "android:build-offline-apk": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/android/Build-OfflineApk.ps1",
     "verify": "node src/cli/verifyLocalLoop.js",
     "verify:local": "node src/cli/verifyLocalLoop.js",
     "verify:local:strict": "node src/cli/verifyLocalLoop.js --require-real-gemma --require-real-speech",

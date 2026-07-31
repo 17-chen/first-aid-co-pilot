@@ -2,11 +2,16 @@ package com.firstaid.copilot.live.ui
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview as CameraPreview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,6 +43,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
@@ -57,11 +66,14 @@ import com.firstaid.copilot.live.ui.theme.FirstAidColors
 import com.firstaid.copilot.live.ui.theme.FirstAidDimens
 import com.firstaid.copilot.live.ui.theme.FirstAidTheme
 import com.firstaid.copilot.live.ui.theme.FirstAidType
+import com.firstaid.copilot.live.vision.cpr.CprOverlayPoint
 import com.firstaid.copilot.live.vision.cpr.CprVisionAnalyzer
+import com.firstaid.copilot.live.vision.cpr.CprVisionOverlaySnapshot
 import com.firstaid.copilot.live.vision.cpr.VisionCameraFacing
 import com.firstaid.copilot.live.vision.cpr.VisionCameraMount
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 @Composable
@@ -73,6 +85,7 @@ fun CameraPiPWindow(
     modifier: Modifier = Modifier,
     lensFacing: Int = CameraSelector.LENS_FACING_FRONT,
     enableVisionAnalysis: Boolean = false,
+    visionOverlay: CprVisionOverlaySnapshot? = null,
     onVisionMetrics: (Map<String, Any?>) -> Unit = {},
     onVisionUnavailable: (String) -> Unit = {},
 ) {
@@ -149,6 +162,13 @@ fun CameraPiPWindow(
             )
         }
 
+        if (showCameraPreview && visionOverlay != null) {
+            CprPipVisionOverlay(
+                overlay = visionOverlay,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
         CameraCaptureLabel(
             analyzing = shouldAnalyzeVision && showCameraPreview,
             modifier = Modifier
@@ -186,9 +206,19 @@ fun CameraPiPWindow(
                     val provider = future.get()
                     releaseCameraBinding()
                     provider.unbindAll()
-                    val preview = CameraPreview.Builder().build().also {
-                        it.setSurfaceProvider(view.surfaceProvider)
-                    }
+                    // Pin the preview to 4:3 so its aspect matches the analysis
+                    // stream; the overlay's FILL_CENTER compensation assumes both
+                    // share the same source aspect ratio.
+                    val preview = CameraPreview.Builder()
+                        .setResolutionSelector(
+                            ResolutionSelector.Builder()
+                                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                                .build(),
+                        )
+                        .build()
+                        .also {
+                            it.setSurfaceProvider(view.surfaceProvider)
+                        }
                     val cameraSelector = CameraSelector.Builder()
                         .requireLensFacing(lensFacing)
                         .build()
@@ -214,6 +244,22 @@ fun CameraPiPWindow(
                         )
                         ImageAnalysis.Builder()
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            // RGBA output makes ImageProxy.toBitmap() a near-trivial
+                            // copy (no YUV->JPEG->decode); 4:3 @ ~VGA keeps the frame
+                            // small for low-latency conversion while MediaPipe lite
+                            // downsamples internally anyway.
+                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                            .setResolutionSelector(
+                                ResolutionSelector.Builder()
+                                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                                    .setResolutionStrategy(
+                                        ResolutionStrategy(
+                                            Size(640, 480),
+                                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                                        ),
+                                    )
+                                    .build(),
+                            )
                             .build()
                             .also { imageAnalysis ->
                                 imageAnalysis.setAnalyzer(executor, analyzer)
@@ -372,6 +418,114 @@ private fun CameraCloseButton(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun CprPipVisionOverlay(
+    overlay: CprVisionOverlaySnapshot,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        // Map normalized landmark coords (in the upright source frame) into view
+        // pixels the same way PreviewView FILL_CENTER does: scale to cover, keep
+        // aspect ratio, center-crop the overflow. Without this the skeleton drifts
+        // off the body because the preview is cropped but the overlay wasn't.
+        val viewW = size.width
+        val viewH = size.height
+        val srcW = overlay.sourceWidth.toFloat()
+        val srcH = overlay.sourceHeight.toFloat()
+        val hasSource = srcW > 0f && srcH > 0f
+        val coverScale = if (hasSource) maxOf(viewW / srcW, viewH / srcH) else 1f
+        val contentW = if (hasSource) srcW * coverScale else viewW
+        val contentH = if (hasSource) srcH * coverScale else viewH
+        val offsetX = (viewW - contentW) / 2f
+        val offsetY = (viewH - contentH) / 2f
+
+        fun CprOverlayPoint.toOffset(): Offset =
+            Offset(
+                x = offsetX + x.coerceIn(0.0, 1.0).toFloat() * contentW,
+                y = offsetY + y.coerceIn(0.0, 1.0).toFloat() * contentH,
+            )
+
+        fun bone(a: CprOverlayPoint?, b: CprOverlayPoint?, color: Color) {
+            if (a == null || b == null) return
+            drawLine(
+                color = color.copy(alpha = 0.9f),
+                start = a.toOffset(),
+                end = b.toOffset(),
+                strokeWidth = 4f,
+                cap = StrokeCap.Round,
+            )
+        }
+
+        fun joint(point: CprOverlayPoint?, color: Color, radius: Float) {
+            if (point == null) return
+            drawCircle(
+                color = Color.Black.copy(alpha = 0.55f),
+                radius = radius + 2f,
+                center = point.toOffset(),
+            )
+            drawCircle(color = color, radius = radius, center = point.toOffset())
+        }
+
+        bone(overlay.leftShoulder, overlay.leftElbow, Color(0xFF38BDF8))
+        bone(overlay.leftElbow, overlay.leftWrist, Color(0xFF38BDF8))
+        bone(overlay.rightShoulder, overlay.rightElbow, Color(0xFF60A5FA))
+        bone(overlay.rightElbow, overlay.rightWrist, Color(0xFF60A5FA))
+        bone(overlay.leftShoulder, overlay.rightShoulder, Color(0xFFA5B4FC))
+
+        val handCenter = overlay.handCenter
+        val chestCenter = overlay.chestCenter
+        val alignment = if (handCenter != null && chestCenter != null) {
+            hypot(handCenter.x - chestCenter.x, handCenter.y - chestCenter.y)
+        } else {
+            Double.POSITIVE_INFINITY
+        }
+        val alignColor = if (alignment <= 0.07) Color(0xFF22C55E) else Color(0xFFFBBF24)
+
+        if (handCenter != null && chestCenter != null) {
+            drawLine(
+                color = alignColor.copy(alpha = 0.85f),
+                start = handCenter.toOffset(),
+                end = chestCenter.toOffset(),
+                strokeWidth = 3f,
+                cap = StrokeCap.Round,
+            )
+        }
+
+        joint(overlay.leftShoulder, Color(0xFFA5B4FC), 4f)
+        joint(overlay.rightShoulder, Color(0xFFA5B4FC), 4f)
+        joint(overlay.leftElbow, Color(0xFF38BDF8), 5f)
+        joint(overlay.rightElbow, Color(0xFF60A5FA), 5f)
+        joint(overlay.leftWrist, Color(0xFF22D3EE), 4f)
+        joint(overlay.rightWrist, Color(0xFF22D3EE), 4f)
+
+        chestCenter?.let { chest ->
+            val c = chest.toOffset()
+            drawCircle(
+                color = Color(0xFFEF4444).copy(alpha = 0.3f),
+                radius = 16f,
+                center = c,
+                style = Stroke(width = 3f),
+            )
+            drawLine(
+                color = Color(0xFFEF4444),
+                start = Offset(c.x - 10f, c.y),
+                end = Offset(c.x + 10f, c.y),
+                strokeWidth = 3f,
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                color = Color(0xFFEF4444),
+                start = Offset(c.x, c.y - 10f),
+                end = Offset(c.x, c.y + 10f),
+                strokeWidth = 3f,
+                cap = StrokeCap.Round,
+            )
+        }
+
+        joint(overlay.handCenter, alignColor, 6f)
     }
 }
 

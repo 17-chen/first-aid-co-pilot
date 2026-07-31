@@ -20,6 +20,7 @@ class EdgeTextToSpeechEdge(
     context: Context,
     private val speechEngine: SherpaOnnxSpeechEngine,
     private val onSpeakingChanged: (Boolean) -> Unit,
+    private val enableSherpaSynthesis: Boolean = true,
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -40,7 +41,9 @@ class EdgeTextToSpeechEdge(
     private var lastAcceptedTextAtMs: Long = Long.MIN_VALUE
 
     init {
-        scope.launch(Dispatchers.IO) { preloadBundledCache() }
+        if (enableSherpaSynthesis) {
+            scope.launch(Dispatchers.IO) { preloadBundledCache() }
+        }
     }
 
     suspend fun prewarmPhrase(
@@ -49,6 +52,7 @@ class EdgeTextToSpeechEdge(
         speed: String? = null,
     ): EdgeSpeechResult {
         if (text.isBlank()) return EdgeSpeechResult(ok = false, error = "blank TTS text")
+        if (!enableSherpaSynthesis) return EdgeSpeechResult(ok = false, error = "sherpa_tts_disabled")
         val key = cacheKey(text, tone, speed)
         cachedPhrases[key]?.takeIf { it.isFile && it.length() > 0L }?.let {
             return EdgeSpeechResult(ok = true, audioFile = it, latencyMs = 0)
@@ -108,6 +112,7 @@ class EdgeTextToSpeechEdge(
         fallback.speak(text, utteranceId, priority, interruptPolicy, tone, speed, shouldFlushQueue)
 
         scope.launch(Dispatchers.IO) {
+            if (!enableSherpaSynthesis) return@launch
             preloadBundledCache()
             val key = cacheKey(text, tone, speed)
             val hasCache = cachedPhrases[key]?.takeIf { it.isFile && it.length() > 0L } != null ||

@@ -165,7 +165,10 @@ class EdgeGemmaAgent(
         }
 
         val key = supplementCacheKey(frame)
-        cachedSupplement(key, frame, fastAnswerText)?.let { return it }
+        cachedSupplement(key, frame, fastAnswerText)?.let {
+            Log.i(TAG, "Edge open-question supplement cache hit cacheKey=$key")
+            return it
+        }
 
         val now = clockMs()
         if (now < openQuestionCircuitOpenUntilMs) {
@@ -180,12 +183,20 @@ class EdgeGemmaAgent(
             fastAnswerText = fastAnswerText,
             answerFocus = supplementFocus(frame.userInput),
         )
+        Log.i(TAG, "Edge open-question supplement start cacheKey=$key")
         val generation = enqueue(PRIORITY_OPEN_QUESTION, prompt, flags.openQuestionSupplementTimeoutMs)
-            ?: return rejectedOpenQuestionSupplement("queue_full")
+            ?: return rejectedOpenQuestionSupplement("queue_full").also {
+                Log.w(TAG, "Edge open-question supplement rejected (queue_full)")
+            }
         if (!generation.ok || generation.text.isBlank()) {
             if (generation.isTimeoutLike()) {
                 tripOpenQuestionCircuit()
             }
+            Log.w(
+                TAG,
+                "Edge open-question supplement generation rejected " +
+                    "error=${generation.error ?: "empty"} latencyMs=${generation.latencyMs}",
+            )
             return rejectedOpenQuestionSupplement(
                 reason = "generation:${generation.error ?: "empty"}",
                 latencyMs = generation.latencyMs,
@@ -195,14 +206,22 @@ class EdgeGemmaAgent(
         val decision = guard.validateOpenQuestionSupplement(generation.text, frame, fastAnswerText)
         val outcome = decision.copy(latencyMs = generation.latencyMs, cacheHit = false)
         if (!outcome.accepted) {
-            Log.w(TAG, "Edge open-question supplement rejected (${outcome.reason ?: "rejected"})")
+            Log.w(
+                TAG,
+                "Edge open-question supplement rejected (${outcome.reason ?: "rejected"}) " +
+                    "raw='${generation.text.take(80)}'",
+            )
             return outcome
         }
 
         consecutiveOpenQuestionTimeouts = 0
         openQuestionCircuitOpenUntilMs = 0L
         storeSupplement(key, outcome)
-        Log.i(TAG, "Edge open-question supplement in ${generation.latencyMs}ms cacheKey=$key")
+        Log.i(
+            TAG,
+            "Edge open-question supplement in ${generation.latencyMs}ms cacheKey=$key " +
+                "raw='${generation.text.take(80)}'",
+        )
         return outcome
     }
 
@@ -322,16 +341,16 @@ class EdgeGemmaAgent(
 
     private fun supplementFocus(question: String): String =
         when (EdgeOpenQuestionPolicy.questionBucket(question)) {
-            "cause" -> "按压是在维持血流。"
-            "bystander" -> "旁人也可准备换手。"
-            "family" -> "旁人联系家属并迎接急救员。"
-            "aed" -> "分析时所有人离开。"
-            "waiting" -> "留意 AED 指令和正常呼吸。"
-            "fear" -> "胸口中央就是正确方向。"
-            "outcome" -> "现在不能承诺结果。"
-            "tired" -> "换手要快，节拍不断。"
-            "count" -> "跟我的节拍就行。"
-            else -> "补充一个安全细节，不重复首答。"
+            "cause" -> "按压是在维持血流"
+            "bystander" -> "旁人也可准备换手"
+            "family" -> "旁人迎接急救员"
+            "aed" -> "分析时所有人离开"
+            "waiting" -> "留意AED和正常呼吸"
+            "fear" -> "胸口中央方向正确"
+            "outcome" -> "结果现在不能承诺"
+            "tired" -> "换手要快节拍不断"
+            "count" -> "跟我的节拍就行"
+            else -> "补充一个安全细节"
         }
 
     // --- Priority scheduler over the single driver ---

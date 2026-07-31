@@ -266,11 +266,11 @@ function getHandPositionFeedback(handPosition) {
     case "too_left":
       return {
         reasonCodes: ["hand_position_left_offset"],
-        tts: { text: "位置向右一点。", tone: "calm_firm" },
+        tts: { text: "往右一点，胸口中央。", tone: "calm_firm" },
         ui: {
           mainText: "位置偏左",
-          secondaryText: "向右调整一点",
-          statusTags: ["位置偏左", "向右一点"],
+          secondaryText: "往右一点，胸口中央",
+          statusTags: ["位置偏左", "往右一点"],
         },
         visualOverlay: {
           mode: "hand_position_feedback",

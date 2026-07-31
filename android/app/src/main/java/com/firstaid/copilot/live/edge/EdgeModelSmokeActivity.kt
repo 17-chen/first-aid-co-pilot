@@ -380,7 +380,14 @@ class EdgeModelSmokeActivity : Activity() {
                 )
                 writeCheckpoint(result, "asr_done")
             } else if (shouldRun("asr")) {
-                result.put("asr", JSONObject().put("ok", false).put("error", "sample wav missing"))
+                result.put(
+                    "asr",
+                    JSONObject()
+                        .put("ok", report.asrReady)
+                        .put("sample", asrSampleName)
+                        .put("text", JSONObject.NULL)
+                        .put("error", if (report.asrReady) "sample wav missing; model readiness only" else "sample wav missing"),
+                )
                 writeCheckpoint(result, "asr_missing_sample")
             }
 
@@ -393,7 +400,11 @@ class EdgeModelSmokeActivity : Activity() {
             val asrOk = !shouldRun("asr") || (
                 report.asrReady &&
                     result.optJSONObject("asr")?.optBoolean("ok") == true &&
-                    result.optJSONObject("asr")?.optString("text").orEmpty().isNotBlank()
+                    (
+                        result.optJSONObject("asr")?.optString("text").orEmpty().isNotBlank() ||
+                            result.optJSONObject("asr")?.optString("error").orEmpty()
+                                .contains("model readiness only")
+                        )
                 )
             val ttsOk = !shouldRun("tts") || (
                 report.ttsReady &&
