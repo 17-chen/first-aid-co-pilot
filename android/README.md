@@ -54,6 +54,18 @@ D:\android-dev\gradle\gradle-8.13\bin\gradle.bat :app:assembleDebug
 
 The debug APK is generated at `android/app/build/outputs/apk/debug/app-debug.apk`.
 
+The main Android project also ships a pinned Gradle 8.9 wrapper. On macOS/Linux,
+with JDK 17 and Android SDK API 35 configured, run:
+
+```bash
+cd android
+./gradlew testDebugUnitTest assembleDebug
+```
+
+The wrapper verifies the Gradle distribution with the SHA-256 recorded in
+`gradle/wrapper/gradle-wrapper.properties`. Large JDK/SDK files remain local and
+are not committed to the repository.
+
 Local setup success does not change safety behavior: Demo builds must not automatically dial real 120, sharing or deletion still requires explicit user confirmation, and mock-only passes are not strict real readiness.
 
 ## On-device Edge Model Smoke
