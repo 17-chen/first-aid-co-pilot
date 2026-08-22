@@ -1,5 +1,7 @@
 package com.firstaid.copilot.live
 
+import com.firstaid.copilot.live.vision.cpr.CprVisionOverlaySnapshot
+
 /**
  * Immutable UI state for the Live CPR Coach screen.
  *
@@ -34,6 +36,9 @@ data class LiveUiState(
     val visualOverlayMode: String? = null,
     val correctionArrow: String? = null,
 
+    /** Latest on-device CPR pose overlay snapshot, rendered inside the camera PiP window. */
+    val visionOverlay: CprVisionOverlaySnapshot? = null,
+
     // --- Haptic metronome intent (D-phase MetronomeController consumes this) ---
     val haptic: HapticState = HapticState(),
 
@@ -59,6 +64,7 @@ data class LiveUiState(
     val openQuestionPhase: OpenQuestionPhase = OpenQuestionPhase.Idle,
     val lastOpenQuestionMetrics: LiveTurnMetrics? = null,
     val openQuestionSupplement: OpenQuestionSupplement? = null,
+    val lastOpenQuestionSupplementText: String? = null,
 
     /**
      * Latest on-device proactive nudge (Phase D). Written only by the proactive

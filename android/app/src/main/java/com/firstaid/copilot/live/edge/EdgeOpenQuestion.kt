@@ -218,7 +218,7 @@ object EdgeOpenQuestionPolicy {
                 "先别因担心停下，继续按压，这是现在最重要的事。"
             Regex("(害怕|紧张|慌|按错|不准|位置)")
                 .containsMatchIn(compact) ->
-                "你做得对，手掌根在胸口中央，跟着节拍继续。"
+                "你做得对，跟着节拍继续按压，别停下来犹豫。"
             Regex("(会不会|能不能).*(醒|救活|好)|醒过来|结果")
                 .containsMatchIn(compact) ->
                 "现在不能保证结果，但持续按压是在帮他维持血流。"

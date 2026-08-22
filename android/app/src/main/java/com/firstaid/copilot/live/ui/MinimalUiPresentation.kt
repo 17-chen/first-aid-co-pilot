@@ -15,6 +15,12 @@ internal data class QualityScorePresentation(
     val tone: QualityScoreTone,
 )
 
+internal data class DemoCprMetricPresentation(
+    val handPosition: String,
+    val rate: Int,
+    val qualityScore: Int,
+)
+
 internal fun qualityScorePresentation(
     score: Int?,
     currentStage: String?,
@@ -43,6 +49,33 @@ internal fun qualityScorePresentation(
         labelText = label,
         tone = tone,
     )
+}
+
+internal fun demoCprMetricPresentation(
+    tick: Int,
+    currentStage: String?,
+): DemoCprMetricPresentation? {
+    if (currentStage?.startsWith("S7") != true) return null
+
+    val initialRightOffset = listOf(
+        DemoCprMetricPresentation(handPosition = "right", rate = 106, qualityScore = 80),
+        DemoCprMetricPresentation(handPosition = "right", rate = 108, qualityScore = 82),
+        DemoCprMetricPresentation(handPosition = "right", rate = 110, qualityScore = 84),
+    )
+    if (tick < initialRightOffset.size) {
+        return initialRightOffset[tick.coerceAtLeast(0)]
+    }
+
+    val alignedWave = listOf(
+        DemoCprMetricPresentation(handPosition = "center", rate = 109, qualityScore = 90),
+        DemoCprMetricPresentation(handPosition = "center", rate = 111, qualityScore = 92),
+        DemoCprMetricPresentation(handPosition = "center", rate = 108, qualityScore = 91),
+        DemoCprMetricPresentation(handPosition = "center", rate = 112, qualityScore = 94),
+        DemoCprMetricPresentation(handPosition = "center", rate = 110, qualityScore = 93),
+    )
+    val alignedTick = tick - initialRightOffset.size
+    val index = ((alignedTick % alignedWave.size) + alignedWave.size) % alignedWave.size
+    return alignedWave[index]
 }
 
 internal data class VoiceControlPresentation(

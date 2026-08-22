@@ -20,6 +20,7 @@ data class DemoPreset(
 data class DemoTurn(
     val preset: DemoPreset,
     val text: String? = null,
+    val delayAfterMs: Long = 0L,
 )
 
 fun demoPresetById(id: String): DemoPreset =
@@ -33,6 +34,15 @@ fun demoCprSetupSequence(): List<DemoTurn> = listOf(
     DemoTurn(demoPresetById("cpr_ready"), "准备好了"),
     DemoTurn(demoPresetById("cpr_start"), "开始按压"),
 )
+
+fun demoCprRecordingSequence(): List<DemoTurn> =
+    demoCprSetupSequence().map { it.copy(delayAfterMs = 350L) } + listOf(
+        DemoTurn(demoPresetById("quality_wave_76"), delayAfterMs = 900L),
+        DemoTurn(demoPresetById("quality_wave_82"), delayAfterMs = 900L),
+        DemoTurn(demoPresetById("quality_wave_86"), delayAfterMs = 900L),
+        DemoTurn(demoPresetById("hand_left_recording"), delayAfterMs = 1_300L),
+        DemoTurn(demoPresetById("quality_wave_84"), delayAfterMs = 900L),
+    )
 
 val demoPresets: List<DemoPreset> = listOf(
     DemoPreset(
@@ -143,6 +153,51 @@ val demoPresets: List<DemoPreset> = listOf(
         requiresCprLoop = true,
     ),
     DemoPreset(
+        id = "quality_wave_76",
+        label = "Quality 104 / 76%",
+        summary = "录屏波动帧：位置=center，频率=104，质量=76%",
+        eventSource = "vision_cpr",
+        eventType = "cpr_quality_update",
+        cprQuality = cprQuality(104, 103, 76, "center", "straight", 0, 58, true),
+        requiresCprLoop = true,
+    ),
+    DemoPreset(
+        id = "quality_wave_82",
+        label = "Quality 108 / 82%",
+        summary = "录屏波动帧：位置=center，频率=108，质量=82%",
+        eventSource = "vision_cpr",
+        eventType = "cpr_quality_update",
+        cprQuality = cprQuality(108, 106, 82, "center", "straight", 0, 72, true),
+        requiresCprLoop = true,
+    ),
+    DemoPreset(
+        id = "quality_wave_86",
+        label = "Quality 112 / 86%",
+        summary = "录屏波动帧：位置=center，频率=112，质量=86%",
+        eventSource = "vision_cpr",
+        eventType = "cpr_quality_update",
+        cprQuality = cprQuality(112, 108, 86, "center", "straight", 0, 88, true),
+        requiresCprLoop = true,
+    ),
+    DemoPreset(
+        id = "hand_left_recording",
+        label = "Hand left + score",
+        summary = "录屏纠正帧：手位偏左，语音往右一点，胸口中央",
+        eventSource = "vision_cpr",
+        eventType = "cpr_quality_update",
+        cprQuality = cprQuality(108, 108, 82, "left", "straight", 0, 104, true),
+        requiresCprLoop = true,
+    ),
+    DemoPreset(
+        id = "quality_wave_84",
+        label = "Quality 109 / 84%",
+        summary = "录屏恢复帧：位置=center，频率=109，质量=84%",
+        eventSource = "vision_cpr",
+        eventType = "cpr_quality_update",
+        cprQuality = cprQuality(109, 108, 84, "center", "straight", 0, 120, true),
+        requiresCprLoop = true,
+    ),
+    DemoPreset(
         id = "rate_low",
         label = "Rate low",
         summary = "仅 CPR 中有效：vision_cpr current_rate=82",
@@ -240,6 +295,8 @@ private fun cprQuality(
 ): Map<String, Any?> =
     mapOf(
         "compressions_started" to compressionsStarted,
+        "compression_rate" to currentRate,
+        "compression_rate_bpm" to currentRate,
         "current_rate" to currentRate,
         "average_rate" to averageRate,
         "quality_score" to qualityScore,

@@ -132,6 +132,31 @@ class LiveOpenQuestionFlowTest {
     }
 
     @Test
+    fun consumedSupplementIsClearedAndCannotReplay() = runTest {
+        val channel = OqFakeChannel()
+        val viewModel = viewModel(channel) { _, _ ->
+            OpenQuestionSupplementOutcome(
+                accepted = true,
+                text = "按压是在维持血流",
+                latencyMs = 80,
+            )
+        }
+        bringOnlineInCprLoop(channel)
+
+        viewModel.submitLiveText("他为什么突然倒下了？")
+        advanceUntilIdle()
+
+        val supplementId = viewModel.uiState.value.openQuestionSupplement?.id.orEmpty()
+        assertTrue(supplementId.isNotBlank())
+
+        viewModel.consumeOpenQuestionSupplement("other_id")
+        assertEquals(supplementId, viewModel.uiState.value.openQuestionSupplement?.id)
+
+        viewModel.consumeOpenQuestionSupplement(supplementId)
+        assertEquals(null, viewModel.uiState.value.openQuestionSupplement)
+    }
+
+    @Test
     fun ignoresServerOpenQuestionAnswerWhileEdgeOwnsIt() = runTest {
         val channel = OqFakeChannel()
         val viewModel = viewModel(channel)

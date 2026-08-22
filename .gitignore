@@ -8,6 +8,7 @@ models/
 src/voice/.runtime/
 tmp/
 temp/
+.tooling/
 *.tmp
 *.temp
 *.part
@@ -25,4 +26,6 @@ android/.gradle/
 android/build/
 android/app/build/
 android/app/libs/*.aar
+android/app/model-assets/
+outputs/
 android/captures/

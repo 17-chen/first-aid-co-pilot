@@ -23,6 +23,7 @@ import com.firstaid.copilot.live.perception.EmaQualityScore
 import com.firstaid.copilot.live.perception.HandPositionHysteresis
 import com.firstaid.copilot.live.perception.PerceptionSignal
 import com.firstaid.copilot.live.perception.smoothInterruptionSeconds
+import com.firstaid.copilot.live.vision.cpr.CprVisionOverlaySnapshot
 import com.firstaid.copilot.live.vision.cpr.evaluateVisionReadiness
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -301,6 +302,9 @@ class LiveSessionViewModel(
         text: String? = null,
         presetId: String? = null,
     ) {
+        if (presetId != null && cprQuality != null) {
+            publishDemoCprQuality(cprQuality)
+        }
         runTurn(
             TurnRequest(
                 sessionId = sessionId,
@@ -346,7 +350,22 @@ class LiveSessionViewModel(
             return
         }
         val safeConfidence = confidence ?: return
-        if (nowMs - lastVisionMetricsEmitMs < VISION_EMIT_INTERVAL_MS) return
+        val overlay = cprQuality.visionOverlayOrNull()
+
+        // Decoupled cadence: the skeleton overlay refreshes on every analyzed
+        // frame for a smooth, low-latency PiP, while the agent-facing
+        // `cpr_quality` event (and its EMA/hysteresis smoothing) stays on the 1s
+        // throttle so server traffic and signal smoothing are unchanged.
+        if (nowMs - lastVisionMetricsEmitMs < VISION_EMIT_INTERVAL_MS) {
+            _uiState.update {
+                it.copy(
+                    sourceBadge = SourceBadge.LiveRecognition,
+                    visionOverlay = overlay,
+                    lastErrorMessage = null,
+                )
+            }
+            return
+        }
 
         val rawInterruptionSeconds = cprQuality.numberOrNull("interruption_seconds")
         val interruptionSeconds = rawInterruptionSeconds?.let {
@@ -371,6 +390,7 @@ class LiveSessionViewModel(
         _uiState.update {
             it.copy(
                 sourceBadge = SourceBadge.LiveRecognition,
+                visionOverlay = overlay,
                 perceptionSignals = smoothedQuality.toPerceptionSignals(nowMs, safeConfidence),
                 lastErrorMessage = null,
             )
@@ -391,6 +411,7 @@ class LiveSessionViewModel(
         _uiState.update {
             it.copy(
                 sourceBadge = SourceBadge.RecordingOnly,
+                visionOverlay = cprQuality.visionOverlayOrNull(),
                 lastErrorMessage = visionReadinessMessage(reason),
                 perceptionSignals = cprQuality.toVisionMetadata(reason).toPerceptionSignals(
                     timestampMs = nowMs,
@@ -405,7 +426,7 @@ class LiveSessionViewModel(
         _uiState.update {
             it.copy(
                 sourceBadge = SourceBadge.RecordingOnly,
-                lastErrorMessage = message,
+                lastErrorMessage = message.takeIf(::shouldShowVisionUnavailableBanner),
                 perceptionSignals = listOf(
                     PerceptionSignal(
                         key = "vision_cpr",
@@ -439,6 +460,7 @@ class LiveSessionViewModel(
         viewModelScope.launch {
             turns.forEach { turn ->
                 val preset = turn.preset
+                preset.cprQuality?.let(::publishDemoCprQuality)
                 val request = TurnRequest(
                     sessionId = sessionId,
                     text = turn.text,
@@ -452,7 +474,28 @@ class LiveSessionViewModel(
                     toolResult = preset.toolResult,
                 )
                 runTurnInline(request, preset.id, SourceBadge.DemoData)
+                if (turn.delayAfterMs > 0L) {
+                    delay(turn.delayAfterMs)
+                }
             }
+        }
+    }
+
+    private fun publishDemoCprQuality(cprQuality: Map<String, Any?>) {
+        val nowMs = System.currentTimeMillis()
+        val confidence = cprQuality.numberOrNull("confidence") ?: DEMO_CPR_CONFIDENCE
+        val score = cprQuality.numberOrNull("quality_score")?.toUiQualityScore()
+        _uiState.update {
+            it.copy(
+                sourceBadge = SourceBadge.DemoData,
+                qualityScore = score ?: it.qualityScore,
+                perceptionSignals = cprQuality.toPerceptionSignals(
+                    timestampMs = nowMs,
+                    confidence = confidence,
+                    ttlMs = DEMO_SIGNAL_TTL_MS,
+                ),
+                lastErrorMessage = null,
+            )
         }
     }
 
@@ -685,6 +728,7 @@ class LiveSessionViewModel(
                     openQuestionPhase = OpenQuestionPhase.Idle,
                     lastOpenQuestionMetrics = null,
                     openQuestionSupplement = null,
+                    lastOpenQuestionSupplementText = null,
                 )
             }
         }
@@ -727,6 +771,7 @@ class LiveSessionViewModel(
                 guidanceSource = "open_question_fast_rule",
                 lastOpenQuestionMetrics = metrics,
                 openQuestionSupplement = null,
+                lastOpenQuestionSupplementText = null,
             )
         }
         launchEdgeOpenQuestionSupplement(stage, question, fastAnswerText, epoch, actionId)
@@ -774,8 +819,7 @@ class LiveSessionViewModel(
                 current.lastActionId != fastActionId ||
                 current.lastUserTranscript != question ||
                 current.ttsPriority == "critical" ||
-                current.pendingConfirmation != null ||
-                current.emergencyCall.requested
+                current.pendingConfirmation != null
             ) {
                 return@update updatedMetrics
             }
@@ -789,7 +833,18 @@ class LiveSessionViewModel(
                     tone = "calm_firm",
                     speed = "normal",
                 ),
+                lastOpenQuestionSupplementText = outcome.text,
             )
+        }
+    }
+
+    fun consumeOpenQuestionSupplement(id: String) {
+        _uiState.update { current ->
+            if (current.openQuestionSupplement?.id == id) {
+                current.copy(openQuestionSupplement = null)
+            } else {
+                current
+            }
         }
     }
 
@@ -864,7 +919,7 @@ class LiveSessionViewModel(
         openQuestionJob = null
         edgeOpenQuestionActive = false
         suppressedOpenQuestionActionIds.clear()
-        _uiState.update { it.copy(openQuestionSupplement = null) }
+        _uiState.update { it.copy(openQuestionSupplement = null, lastOpenQuestionSupplementText = null) }
     }
 
     /**
@@ -1190,6 +1245,8 @@ class LiveSessionViewModel(
         private const val TAG = "LiveSessionViewModel"
         private const val VISION_EMIT_INTERVAL_MS = 1_000L
         private const val VISION_SIGNAL_TTL_MS = 1_500L
+        private const val DEMO_SIGNAL_TTL_MS = 10_000L
+        private const val DEMO_CPR_CONFIDENCE = 0.9
 
         private fun defaultSessionId(): String =
             "android_live_" + UUID.randomUUID().toString().substring(0, 8)
@@ -1211,8 +1268,16 @@ class LiveSessionViewModel(
 private fun Map<String, Any?>.numberOrNull(key: String): Double? =
     (this[key] as? Number)?.toDouble()
 
+private fun Double.toUiQualityScore(): Int =
+    (if (this <= 1.0) this * 100.0 else this)
+        .toInt()
+        .coerceIn(0, 100)
+
 private fun Map<String, Any?>.booleanOrNull(key: String): Boolean? =
     this[key] as? Boolean
+
+private fun Map<String, Any?>.visionOverlayOrNull(): CprVisionOverlaySnapshot? =
+    this["debug_overlay"] as? CprVisionOverlaySnapshot
 
 private fun Map<String, Any?>.toVisionMetadata(readinessReason: String?): Map<String, Any?> =
     linkedMapOf(
@@ -1239,12 +1304,18 @@ private fun visionReadinessMessage(reason: String?): String =
         else -> "视觉未就绪，仅录制/采集。"
     }
 
+internal fun shouldShowVisionUnavailableBanner(message: String): Boolean =
+    !message.contains("缺少姿态模型") &&
+        !message.contains("没有这个姿势识别模型") &&
+        !message.contains("pose_landmarker_lite.task")
+
 internal fun isCprLiveRecognitionStage(stage: String?): Boolean =
     stage == "S7_CPR_LOOP"
 
 private fun Map<String, Any?>.toPerceptionSignals(
     timestampMs: Long,
     confidence: Double,
+    ttlMs: Long = 1_500L,
 ): List<PerceptionSignal<Any>> =
     map { (key, value) ->
         PerceptionSignal(
@@ -1253,7 +1324,7 @@ private fun Map<String, Any?>.toPerceptionSignals(
             confidence = confidence,
             source = "vision_cpr",
             timestampMs = timestampMs,
-            ttlMs = 1_500L,
+            ttlMs = ttlMs,
         )
     }
 
@@ -1385,6 +1456,7 @@ internal fun reduceLiveEvent(current: LiveUiState, event: LiveAgentEvent): LiveU
                 micState = if (current.micState == MicState.Capturing) MicState.Listening else current.micState,
                 openQuestionPhase = openQuestionPhase ?: OpenQuestionPhase.Idle,
                 openQuestionSupplement = null,
+                lastOpenQuestionSupplementText = null,
             )
             base.applyGuidance(event.action)
         }
@@ -1393,6 +1465,11 @@ internal fun reduceLiveEvent(current: LiveUiState, event: LiveAgentEvent): LiveU
             current.copy(
                 currentStage = nextStage,
                 openQuestionSupplement = if (nextStage != current.currentStage) null else current.openQuestionSupplement,
+                lastOpenQuestionSupplementText = if (nextStage != current.currentStage) {
+                    null
+                } else {
+                    current.lastOpenQuestionSupplementText
+                },
             )
         }
         is LiveAgentEvent.Metrics -> current.applyLiveMetrics(event.metrics)

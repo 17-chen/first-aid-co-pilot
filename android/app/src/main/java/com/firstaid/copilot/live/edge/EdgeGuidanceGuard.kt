@@ -271,6 +271,12 @@ class EdgeGuidanceGuard(
         if (Regex("(不知道|不清楚|不确定|说不准|根据现场情况判断)").containsMatchIn(compact) && compact.length < 18) {
             return "low_value_open_question_answer"
         }
+        if (
+            Regex("(保持稳定|保持冷静|循序渐进|别紧张|别害怕|放轻松|你可以的)").containsMatchIn(compact) &&
+            !Regex("(胸口|中央|AED|除颤|换手|血流|距离|离开|急救员|正常呼吸|节拍)").containsMatchIn(compact)
+        ) {
+            return "low_value_open_question_answer"
+        }
         return null
     }
 

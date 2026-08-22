@@ -245,6 +245,18 @@ class EdgeGuidanceGuardTest {
         assertEquals("duplicate_fast_answer", decision.reason)
     }
 
+    @Test
+    fun supplementRejectsGenericReassuranceWithoutConcreteDetail() {
+        val decision = guard.validateOpenQuestionSupplement(
+            rawText = "保持稳定，循序渐进。",
+            frame = cprFrame(),
+            fastAnswerText = "你做得对，手掌根在胸口中央，跟着节拍继续。",
+        )
+
+        assertFalse(decision.accepted)
+        assertEquals("low_value_open_question_answer", decision.reason)
+    }
+
     // endregion
 
     // region plain-text NLU label path (功能 E 选定方案：模型只回一个标签)

@@ -89,23 +89,17 @@ class EdgeGemmaPromptBuilder {
      * point and leaves all safety enforcement to [EdgeGuidanceGuard].
      */
     fun openQuestionSupplementPrompt(request: OpenQuestionSupplementRequest): String {
-        val stage = request.stage?.takeIf { it.isNotBlank() } ?: "S7_CPR_LOOP"
         val fastAnswerSaidContinue = request.fastAnswerText.contains("继续按压")
         return buildString {
-            append("SYSTEM:\n")
-            append(OPEN_QUESTION_SUPPLEMENT_SYSTEM_PROMPT)
-            append("\n\nUSER:\n")
-            append("[Question] ").append(request.question).append("\n")
-            append("[Stage] ").append(stage).append("\n")
-            append("[Fast Answer Text] ").append(request.fastAnswerText).append("\n")
-            append("[Answer Focus] ").append(request.answerFocus).append("\n")
-            append("只补规则首答没说过的一点，不复述、不同义改写首答。")
-            append("只输出一句中文，不超过18个汉字，不要 JSON、不要引号、不要解释。")
+            append("补一句中文，12字内。必须表达补充点原意，不抽象安慰，不扩写。别重复首答，别诊断承诺，别让停按压。\n")
+            append("问：").append(request.question).append("\n")
+            append("首答：").append(request.fastAnswerText).append("\n")
+            append("补充点：").append(request.answerFocus).append("\n")
             append(
                 if (fastAnswerSaidContinue) {
-                    "不要以“继续按压”开头，因为首答已经说过。"
+                    "不要以继续按压开头。"
                 } else {
-                    "首答未说“继续按压”时，必要时才可以用它开头。"
+                    "必要时可说继续按压。"
                 },
             )
         }

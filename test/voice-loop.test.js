@@ -541,7 +541,7 @@ test("CPR live quality question uses mock vision correction instead of repeating
   assert.equal(result.event.user_input.intent, "ask_cpr_quality");
   assert.equal(result.response_type, "critical_correction");
   assert.equal(result.guidance_source, "rule_feedback_critical");
-  assert.match(result.guidance_action.tts.text, /位置向右一点/);
+  assert.match(result.guidance_action.tts.text, /往右一点，胸口中央/);
   assert.doesNotMatch(result.guidance_action.tts.text, /拨打 120|免提/);
   assert.equal(result.live_driver_proposal.responseType, "question_answer");
 });

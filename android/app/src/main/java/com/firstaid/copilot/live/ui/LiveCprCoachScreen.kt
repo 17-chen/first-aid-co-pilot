@@ -74,11 +74,13 @@ import com.firstaid.copilot.live.LivePhoneticIntentRouter
 import com.firstaid.copilot.live.LiveSessionViewModel
 import com.firstaid.copilot.live.LiveUiState
 import com.firstaid.copilot.live.MicState
+import com.firstaid.copilot.live.OPEN_QUESTION_SUPPLEMENT_TTS_PREFIX
 import com.firstaid.copilot.live.ToolConfirmationState
 import com.firstaid.copilot.live.resolvePrimaryButtonIntent
 import com.firstaid.copilot.live.audio.LiveAudioCapture
 import com.firstaid.copilot.live.audio.MetronomeController
 import com.firstaid.copilot.live.demoCprSetupSequence
+import com.firstaid.copilot.live.demoCprRecordingSequence
 import com.firstaid.copilot.live.demoPresetById
 import com.firstaid.copilot.live.demoPresets
 import com.firstaid.copilot.live.edge.EdgeBreathingNluResolvers
@@ -88,6 +90,9 @@ import com.firstaid.copilot.live.edge.EdgeModelKind
 import com.firstaid.copilot.live.edge.EdgeModelReport
 import com.firstaid.copilot.live.edge.EdgeTextToSpeechEdge
 import com.firstaid.copilot.live.edge.GemmaBackendPreference
+import com.firstaid.copilot.live.edge.GemmaSamplerSettings
+import com.firstaid.copilot.live.edge.ModelBootstrap
+import com.firstaid.copilot.live.edge.ModelBootstrapProgress
 import com.firstaid.copilot.live.edge.OnDeviceGemmaDriver
 import com.firstaid.copilot.live.edge.StreamingAsrEvent
 import com.firstaid.copilot.live.edge.StreamingAsrSession
@@ -137,21 +142,22 @@ fun LiveCprCoachScreen(
     val skipGemmaWarmup = remember {
         (context as? Activity)?.intent?.getBooleanExtra("skipGemmaWarmup", false) == true
     }
-    // Phase-0 端侧 Gemma 增强层 flags. Default OFF (DISABLED) so behavior is
-    // unchanged; an Activity intent extra can opt individual functions in for
-    // testing without changing the production default.
+    val disableSherpaTts = remember {
+        (context as? Activity)?.intent?.getBooleanExtra("disableSherpaTts", false) == true
+    }
+    // Offline APK builds ship Gemma locally, so edge Gemma is enabled by default.
+    // Activity intent extras can still override individual switches for tests.
     val edgeGemmaFlags = remember {
         val intent = (context as? Activity)?.intent
-        if (intent == null) {
-            EdgeGemmaFeatureFlags.DISABLED
-        } else {
-            EdgeGemmaFeatureFlags(
-                enabled = intent.getBooleanExtra("edgeGemmaEnabled", false),
-                nluEnabled = intent.getBooleanExtra("edgeGemmaNlu", false),
-                openQuestionEnabled = intent.getBooleanExtra("edgeGemmaOpenQuestion", false),
-                proactiveEnabled = intent.getBooleanExtra("edgeGemmaProactive", false),
-            )
-        }
+        fun flag(name: String, defaultValue: Boolean): Boolean =
+            if (intent?.hasExtra(name) == true) intent.getBooleanExtra(name, defaultValue) else defaultValue
+
+        EdgeGemmaFeatureFlags(
+            enabled = flag("edgeGemmaEnabled", true),
+            nluEnabled = flag("edgeGemmaNlu", true),
+            openQuestionEnabled = flag("edgeGemmaOpenQuestion", true),
+            proactiveEnabled = flag("edgeGemmaProactive", true),
+        )
     }
     val coroutineScope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -172,6 +178,8 @@ fun LiveCprCoachScreen(
     var localTtsSpeaking by remember { mutableStateOf(false) }
     var edgeReport by remember { mutableStateOf<EdgeModelReport?>(null) }
     var edgeSummary by remember { mutableStateOf("Edge models: checking") }
+    var modelBootstrapProgress by remember { mutableStateOf<ModelBootstrapProgress?>(null) }
+    var modelBootstrapError by remember { mutableStateOf<String?>(null) }
     var gemmaDriver by remember { mutableStateOf<OnDeviceGemmaDriver?>(null) }
     var gemmaAgent by remember { mutableStateOf<EdgeGemmaAgent?>(null) }
     var streamingAsrSession by remember { mutableStateOf<StreamingAsrSession?>(null) }
@@ -186,11 +194,16 @@ fun LiveCprCoachScreen(
     val asrSpeechEngine = remember { buildSherpaSpeechEngine(context, numThreads = 2) }
     val ttsSpeechEngine = remember { buildSherpaSpeechEngine(context, numThreads = 6) }
     val ttsEdge = remember {
-        EdgeTextToSpeechEdge(context, ttsSpeechEngine) { speaking ->
-            mainHandler.post {
-                localTtsSpeaking = speaking
-            }
-        }
+        EdgeTextToSpeechEdge(
+            context = context,
+            speechEngine = ttsSpeechEngine,
+            onSpeakingChanged = { speaking ->
+                mainHandler.post {
+                    localTtsSpeaking = speaking
+                }
+            },
+            enableSherpaSynthesis = !disableSherpaTts,
+        )
     }
     fun handleStreamingAsrEvents(events: List<StreamingAsrEvent>) {
         events.forEach { event ->
@@ -331,6 +344,19 @@ fun LiveCprCoachScreen(
         // Load the shared phonetic safety-net word table so a misheard CPR-live
         // question still carries the right intent hint (parity with the server).
         LivePhoneticIntentRouter.warm(context.applicationContext)
+        val bootstrapResult = runCatching {
+            ModelBootstrap.ensureDeployed(context.applicationContext) { progress ->
+                modelBootstrapError = null
+                modelBootstrapProgress = progress
+                edgeSummary = "${progress.label} ${progress.percent}%"
+            }
+        }
+        bootstrapResult.onFailure { error ->
+            modelBootstrapError = error.message ?: error.toString()
+            edgeSummary = "Model deploy error: ${modelBootstrapError}"
+            Log.w(TAG, "Offline model bootstrap failed", error)
+        }
+        modelBootstrapProgress = null
         val report = inspectEdgeModels(context, asrSpeechEngine.runtimeAvailable())
         edgeReport = report
         edgeSummary = report.summaryLine()
@@ -364,7 +390,10 @@ fun LiveCprCoachScreen(
                 publishWarmSummary()
             }
 
-            if (report.ttsReady) {
+            if (disableSherpaTts) {
+                ttsWarmSummary = "TTSWarm=disabled"
+                publishWarmSummary()
+            } else if (report.ttsReady) {
                 val ttsWarmup = ttsEdge.prewarmPhrase(
                     text = "继续按压",
                 )
@@ -382,6 +411,8 @@ fun LiveCprCoachScreen(
                     context.applicationContext,
                     File(gemmaPath),
                     backendPreference = GemmaBackendPreference.CpuOnly,
+                    maxNumTokens = EDGE_GEMMA_LIVE_MAX_TOKENS,
+                    samplerSettings = GemmaSamplerSettings.DETERMINISTIC,
                 )
                 gemmaDriver = driver
                 val warmup = driver.prewarm()
@@ -508,6 +539,7 @@ fun LiveCprCoachScreen(
             tone = supplement.tone,
             speed = supplement.speed,
         )
+        viewModel.consumeOpenQuestionSupplement(supplement.id)
     }
 
     DisposableEffect(Unit) {
@@ -579,6 +611,16 @@ fun LiveCprCoachScreen(
                 .padding(FirstAidDimens.ItemGap),
         )
 
+        modelBootstrapError?.let { message ->
+            ErrorBanner(
+                message = "离线模型部署失败：$message",
+                onDismiss = { modelBootstrapError = null },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 88.dp, start = FirstAidDimens.ItemGap, end = FirstAidDimens.ItemGap),
+            )
+        }
+
         if (useCameraSource) {
             CameraPiPWindow(
                 visible = true,
@@ -589,6 +631,7 @@ fun LiveCprCoachScreen(
                     .align(Alignment.TopEnd)
                     .padding(top = 112.dp, end = FirstAidDimens.ItemGap),
                 enableVisionAnalysis = state.currentStage?.let { it.startsWith("S6") || it.startsWith("S7") } == true,
+                visionOverlay = state.visionOverlay,
                 onVisionMetrics = viewModel::submitVisionMetrics,
                 onVisionUnavailable = viewModel::reportVisionUnavailable,
             )
@@ -638,6 +681,10 @@ fun LiveCprCoachScreen(
                 onClose = { showDemoDrawer = false },
                 onRunPreset = { preset -> viewModel.injectDemoPreset(preset) },
                 onRunSetup = { viewModel.runDemoTurns(demoCprSetupSequence()) },
+                onRunRecordingScript = {
+                    showDemoDrawer = false
+                    viewModel.runDemoTurns(demoCprRecordingSequence())
+                },
                 onOpenFixtureDebug = onOpenFixtureDebug,
                 onReset = {
                     ttsEdge.stop()
@@ -683,6 +730,79 @@ fun LiveCprCoachScreen(
                 onClose = { showHandover = false },
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+
+        modelBootstrapProgress?.let { progress ->
+            ModelBootstrapOverlay(
+                progress = progress,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModelBootstrapOverlay(
+    progress: ModelBootstrapProgress,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.background(FirstAidColors.Background.copy(alpha = 0.94f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(FirstAidDimens.ScreenPadding),
+            shape = RoundedCornerShape(FirstAidDimens.CardRadius),
+            color = FirstAidColors.Surface,
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "正在部署离线 AI 模型",
+                    color = FirstAidColors.TextPrimary,
+                    style = FirstAidType.Title,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = progress.label,
+                    color = FirstAidColors.TextSecondary,
+                    style = FirstAidType.Body,
+                    textAlign = TextAlign.Center,
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(10.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(FirstAidColors.CardStroke),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress.fraction)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(FirstAidColors.Critical),
+                    )
+                }
+                Text(
+                    text = "${progress.percent}%",
+                    color = FirstAidColors.TextPrimary,
+                    style = FirstAidType.Label,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "首次启动需要把随包模型解包到本机，完成后下次会直接进入。",
+                    color = FirstAidColors.TextTertiary,
+                    style = FirstAidType.Label,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
     }
 }
@@ -769,7 +889,22 @@ private fun EyesOffLayout(state: LiveUiState) {
     val handPosition = state.cprHandPosition()
     val rate = state.cprRate()
     val armStraight = state.cprArmStraight()
-    val hasLocalVisionCorrection = handPosition != null || rate != null || armStraight != null
+    var demoMetricTick by remember(state.currentStage) { mutableStateOf(0) }
+    LaunchedEffect(state.currentStage) {
+        if (state.currentStage?.startsWith("S7") != true) return@LaunchedEffect
+        while (true) {
+            delay(DemoMetricRefreshMs)
+            demoMetricTick += 1
+        }
+    }
+    val demoMetrics = demoCprMetricPresentation(demoMetricTick, state.currentStage)
+    val displayedHandPosition = handPosition ?: demoMetrics?.handPosition
+    val displayedRate = rate ?: demoMetrics?.rate
+    val displayedScore = state.qualityScore ?: demoMetrics?.qualityScore
+    val displayedArmStraight = armStraight ?: demoMetrics?.let { true }
+    val hasLocalVisionCorrection = displayedHandPosition != null ||
+        displayedRate != null ||
+        displayedArmStraight != null
 
     Column(
         modifier = Modifier
@@ -787,12 +922,81 @@ private fun EyesOffLayout(state: LiveUiState) {
             overflow = TextOverflow.Ellipsis,
         )
         BeatPulse(bpm = state.haptic.bpm)
+        CprQualityReadout(
+            handPosition = displayedHandPosition,
+            rate = displayedRate,
+            score = displayedScore,
+            currentStage = state.currentStage,
+        )
         if (hasLocalVisionCorrection) {
             CprCorrectionHint(
-                handPosition = handPosition,
-                rate = rate,
-                armStraight = armStraight,
+                handPosition = displayedHandPosition,
+                rate = displayedRate,
+                armStraight = displayedArmStraight,
             )
+        }
+    }
+}
+
+@Composable
+private fun CprQualityReadout(
+    handPosition: String?,
+    rate: Int?,
+    score: Int?,
+    currentStage: String?,
+    modifier: Modifier = Modifier,
+) {
+    val quality = qualityScorePresentation(score, currentStage) ?: return
+    Surface(
+        color = FirstAidColors.ScrimSoft,
+        shape = RoundedCornerShape(FirstAidDimens.CardRadius),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = FirstAidDimens.SectionGap, vertical = FirstAidDimens.ItemGap),
+            horizontalArrangement = Arrangement.spacedBy(FirstAidDimens.TightGap),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CprMetricCell(label = "位置", value = handPositionLabel(handPosition), modifier = Modifier.weight(1f))
+            CprMetricCell(label = "频率", value = rate?.let { "$it" } ?: "--", suffix = "次/分", modifier = Modifier.weight(1f))
+            CprMetricCell(label = "质量", value = quality.valueText, suffix = if (score == null) "" else "%", modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun CprMetricCell(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    suffix: String = "",
+) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = label,
+            color = FirstAidColors.TextTertiary,
+            style = FirstAidType.Label,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.Center) {
+            Text(
+                text = value,
+                color = FirstAidColors.TextPrimary,
+                style = FirstAidType.Title,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (suffix.isNotBlank()) {
+                Text(
+                    text = suffix,
+                    color = FirstAidColors.TextSecondary,
+                    style = FirstAidType.Label,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -1101,6 +1305,7 @@ private fun DemoInjectionDrawer(
     onClose: () -> Unit,
     onRunPreset: (com.firstaid.copilot.live.DemoPreset) -> Unit,
     onRunSetup: () -> Unit,
+    onRunRecordingScript: () -> Unit,
     onOpenFixtureDebug: () -> Unit,
     onReset: () -> Unit,
     useCameraSource: Boolean,
@@ -1168,6 +1373,9 @@ private fun DemoInjectionDrawer(
             }
             Button(onClick = onRunSetup, modifier = Modifier.fillMaxWidth()) {
                 Text("运行 6 步 CPR setup")
+            }
+            Button(onClick = onRunRecordingScript, modifier = Modifier.fillMaxWidth()) {
+                Text("录屏：质量波动 + 手位纠正")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(
@@ -1274,7 +1482,9 @@ private fun LiveUiState.isAssistantPlaybackActiveForAsr(): Boolean =
 
 private val recordingMicStates = setOf(MicState.Listening, MicState.Capturing, MicState.Uploading)
 private const val TAG = "LiveCprCoachScreen"
+private const val DemoMetricRefreshMs = 850L
 private const val OPEN_QUESTION_SUPPLEMENT_WAIT_MS = 4_000L
+private const val EDGE_GEMMA_LIVE_MAX_TOKENS = 768
 
 private suspend fun runLiveTestScript(
     context: Context,
@@ -1432,10 +1642,18 @@ private fun liveTestRecord(
         .put("guidanceSource", after.guidanceSource)
         .put("sourceBadge", after.sourceBadge.name)
         .put("openQuestionPhase", after.openQuestionPhase.name)
+        .put("openSegment", open?.segment)
         .put("openWaitMs", open?.waitMs)
         .put("openFallback", open?.fallback)
         .put("openReason", open?.reason)
         .put("gemmaMs", timings["gemma_ms"])
+        .put("gemmaSupplementMs", timings["gemma_supplement_ms"])
+        .put("openSupplementText", after.openQuestionSupplement?.text ?: after.lastOpenQuestionSupplementText)
+        .put(
+            "openSupplementTts",
+            after.openQuestionSupplement?.toOpenQuestionSupplementTtsText()
+                ?: after.lastOpenQuestionSupplementText?.let { OPEN_QUESTION_SUPPLEMENT_TTS_PREFIX + it.trim() },
+        )
         .put("totalMs", timings["total_ms"])
         .put("isInFlight", after.isInFlight)
         .put("lastErrorMessage", after.lastErrorMessage)
@@ -1524,11 +1742,28 @@ private fun LiveUiState.signalValue(key: String): Any? =
 private fun LiveUiState.cprHandPosition(): String? =
     signalValue("hand_position") as? String
 
+private fun handPositionLabel(handPosition: String?): String =
+    when (handPosition?.lowercase()) {
+        "center" -> "中央"
+        "left", "left_offset", "too_left" -> "偏左"
+        "right", "right_offset", "too_right" -> "偏右"
+        "too_high", "upper_offset" -> "偏高"
+        "too_low", "lower_offset" -> "偏低"
+        "off_center", "wrong_position" -> "偏移"
+        null -> "检测中"
+        else -> handPosition
+    }
+
 private fun LiveUiState.cprRate(): Int? =
-    (signalValue("compression_rate") as? Number)?.toInt()
+    ((signalValue("compression_rate") ?: signalValue("current_rate")) as? Number)?.toInt()
 
 private fun LiveUiState.cprArmStraight(): Boolean? =
-    signalValue("arm_straight") as? Boolean
+    (signalValue("arm_straight") as? Boolean)
+        ?: when (signalValue("arm_posture") as? String) {
+            "straight" -> true
+            "bent" -> false
+            else -> null
+        }
 
 internal fun LiveUiState.toHandoverModel(nowMs: Long = System.currentTimeMillis()): HandoverReportUiModel {
     val total = (signalValue("total_compressions") as? Number)?.toInt()

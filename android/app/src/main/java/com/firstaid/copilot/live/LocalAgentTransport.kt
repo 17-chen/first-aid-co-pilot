@@ -652,7 +652,7 @@ private class LocalSession(
 
     private fun handPositionFeedback(timestamp: String): GuidanceAction? {
         val spec = when (handPosition) {
-            "left", "left_offset", "too_left" -> HandFeedback("位置偏左", "向右调整一点", "位置向右一点。", "right")
+            "left", "left_offset", "too_left" -> HandFeedback("位置偏左", "往右一点，胸口中央", "往右一点，胸口中央。", "right")
             "right", "right_offset", "too_right" -> HandFeedback("位置偏右", "向左调整一点", "位置向左一点。", "left")
             "too_high", "upper_offset" -> HandFeedback("位置偏高", "往下调整一点", "手再往下一点。", "down")
             "too_low", "lower_offset" -> HandFeedback("位置偏低", "往上调整一点", "手再往上一点。", "up")

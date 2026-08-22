@@ -15,10 +15,44 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildFeatures {
         compose = true
+    }
+
+    sourceSets {
+        getByName("main") {
+            val skipModelAssets = providers.gradleProperty("skipModelAssets")
+                .map(String::toBoolean)
+                .orElse(false)
+                .get()
+            if (!skipModelAssets) {
+                assets.srcDir("model-assets")
+            }
+        }
+    }
+
+    androidResources {
+        noCompress += listOf(
+            "bin",
+            "fst",
+            "json",
+            "litertlm",
+            "onnx",
+            "ort",
+            "part000",
+            "part001",
+            "part002",
+            "part003",
+            "task",
+            "tflite",
+            "wav",
+        )
     }
 
     buildTypes {

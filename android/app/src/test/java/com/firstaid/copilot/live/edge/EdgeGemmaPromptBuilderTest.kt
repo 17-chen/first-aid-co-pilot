@@ -81,17 +81,15 @@ class EdgeGemmaPromptBuilderTest {
             answerFocus = "按压是在维持血流。",
         )
 
-        assertTrue(prompt.startsWith("SYSTEM:"))
-        assertTrue(prompt.contains("开放问答补充层"))
-        assertTrue(prompt.contains("[Question]"))
+        assertTrue(prompt.startsWith("补一句中文"))
         assertTrue(prompt.contains("会不会把肋骨按断"))
-        assertTrue(prompt.contains("[Stage] S7_CPR_LOOP"))
-        assertTrue(prompt.contains("[Fast Answer Text] 继续按压，不要停，我在。"))
-        assertTrue(prompt.contains("[Answer Focus] 按压是在维持血流。"))
-        assertTrue(prompt.contains("只补规则首答没说过的一点"))
-        assertTrue(prompt.contains("不超过18个汉字"))
-        assertTrue(prompt.contains("不要以“继续按压”开头"))
-        assertTrue(prompt.contains("不要 JSON"))
+        assertTrue(prompt.contains("首答：继续按压，不要停，我在。"))
+        assertTrue(prompt.contains("补充点：按压是在维持血流。"))
+        assertTrue(prompt.contains("别重复首答"))
+        assertTrue(prompt.contains("12字内"))
+        assertTrue(prompt.contains("只围绕补充点"))
+        assertTrue(prompt.contains("不要以继续按压开头"))
+        assertTrue("supplement prompt should be tiny: ${prompt.length}", prompt.length < 180)
     }
 
     @Test
@@ -102,8 +100,7 @@ class EdgeGemmaPromptBuilderTest {
             answerFocus = "把注意力拉回按压。",
         )
 
-        assertTrue(prompt.contains("首答未说“继续按压”"))
-        assertTrue(prompt.contains("必要时才可以用它开头"))
+        assertTrue(prompt.contains("必要时可说继续按压"))
     }
 
     @Test
