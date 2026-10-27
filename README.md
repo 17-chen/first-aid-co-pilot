@@ -59,7 +59,7 @@ Reference screens from the **Practice Web prototype**, currently with a Chinese 
 This diagram summarizes responsibility boundaries. The Node reference and native Android implementation have different internal wiring; see the technical reference for details.
 
 ```mermaid
-flowchart LR
+flowchart TD
     INPUT["Camera / microphone / device signals"] --> EVENTS["Perception events"]
     EVENTS --> RULES["Rule engine + session state"]
     RULES --> GUARD["Validation + priority arbitration"]

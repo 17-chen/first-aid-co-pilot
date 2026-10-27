@@ -59,7 +59,7 @@ FirstAid Copilot 将确定性规则状态机、语音、摄像头动作信号与
 下图概括职责边界。Node 参考实现与 Android 原生实现的内部连接不同，细节见技术参考。
 
 ```mermaid
-flowchart LR
+flowchart TD
     INPUT["摄像头 / 麦克风 / 设备信号"] --> EVENTS["感知事件"]
     EVENTS --> RULES["规则引擎 + 会话状态"]
     RULES --> GUARD["安全校验 + 优先级仲裁"]
